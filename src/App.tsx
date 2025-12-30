@@ -17,7 +17,8 @@ function App() {
           fontFamily: 'Arial', 
           height: '200px', 
           fontSize: '12px',
-          wordWrap: 'break-word'
+          wordWrap: 'break-word',
+          whiteSpace: 'pre-wrap'
         }}
       >
         {coords}

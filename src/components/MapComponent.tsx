@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Loader } from '@googlemaps/js-api-loader'
 
 interface MapComponentProps {
@@ -12,8 +12,20 @@ interface ShapeRegistry {
   markers: google.maps.Marker[];
 }
 
+const DEFAULT_LAT = 23.0918
+const DEFAULT_LNG = 72.5974
+
 const MapComponent: React.FC<MapComponentProps> = ({ onCoordsUpdate }) => {
   const mapRef = useRef<HTMLDivElement>(null)
+  const [lat, setLat] = useState<number | string>(DEFAULT_LAT)
+  const [lng, setLng] = useState<number | string>(DEFAULT_LNG)
+  const shapesRef = useRef<ShapeRegistry>({
+    polygons: [],
+    circles: [],
+    rectangles: [],
+    markers: []
+  })
+  const updateCoordsRef = useRef<(shape?: any) => void>(() => {})
   
   useEffect(() => {
     const loader = new Loader({
@@ -30,7 +42,7 @@ const MapComponent: React.FC<MapComponentProps> = ({ onCoordsUpdate }) => {
       let selectedShape: google.maps.Polygon | google.maps.Circle | google.maps.Rectangle | google.maps.Marker | null = null
       let all_overlays: any[] = []
 
-      const location = new google.maps.LatLng(28.620585, 77.228609)
+      const location = new google.maps.LatLng(23.0918, 72.5974)
       const mapOptions: google.maps.MapOptions = {
         zoom: 12,
         center: location,
@@ -130,12 +142,27 @@ const MapComponent: React.FC<MapComponentProps> = ({ onCoordsUpdate }) => {
       drawingManager.setMap(map)
 
       // Store references to shapes
-      const shapes: ShapeRegistry = {
-        polygons: [],
-        circles: [],
-        rectangles: [],
-        markers: []
-      }
+      const shapes = shapesRef.current
+
+      // Reset markers on init to handle Strict Mode / Re-mounts
+      shapes.markers.forEach(m => m.setMap(null))
+      shapes.markers = []
+
+      // Initialize default marker
+      const defaultMarker = new google.maps.Marker({
+          position: { lat: DEFAULT_LAT, lng: DEFAULT_LNG },
+          map: map, // map is initialized above
+          draggable: true,
+      })
+      shapes.markers.push(defaultMarker)
+      
+      defaultMarker.addListener('dragend', (e: any) => {
+          const newLat = e.latLng.lat()
+          const newLng = e.latLng.lng()
+          setLat(newLat)
+          setLng(newLng)
+          updateShapeCoords(defaultMarker)
+      })
 
       const updateDrawingModes = () => {
         const hasGeofence = shapes.polygons.length > 0 || shapes.circles.length > 0 || shapes.rectangles.length > 0
@@ -155,7 +182,12 @@ const MapComponent: React.FC<MapComponentProps> = ({ onCoordsUpdate }) => {
         })
       }
 
+
       const checkGeofence = () => {
+        const hasGeofence = shapes.polygons.length > 0 || shapes.circles.length > 0 || shapes.rectangles.length > 0
+        
+        if (!hasGeofence) return ""
+
         if (shapes.markers.length === 0) return ""
 
         // We assume single marker for status display as per previous logic implied context
@@ -165,32 +197,28 @@ const MapComponent: React.FC<MapComponentProps> = ({ onCoordsUpdate }) => {
         if (!position) return ""
 
         let isInside = false
-        let insideWhat: string[] = []
 
         shapes.polygons.forEach(poly => {
             if (google.maps.geometry.poly.containsLocation(position, poly)) {
                 isInside = true
-                insideWhat.push('Polygon')
             }
         })
 
         shapes.circles.forEach(circle => {
             if (google.maps.geometry.spherical.computeDistanceBetween(position, circle.getCenter()!) <= circle.getRadius()) {
                 isInside = true
-                insideWhat.push('Circle')
             }
         })
 
         shapes.rectangles.forEach(rect => {
             if (rect.getBounds() && rect.getBounds()!.contains(position)) {
                 isInside = true
-                insideWhat.push('Rectangle')
             }
         })
 
-         return `<br/><br/>${isInside 
-            ? `<span style="color:green; font-weight:bold">INSIDE ${insideWhat.join(', ')}</span>` 
-            : `<span style="color:red; font-weight:bold">OUTSIDE</span>`}`
+         return `\n\n${isInside 
+            ? `INSIDE Selected Area` 
+            : `OUTSIDE Selected Area`}`
       }
 
       const updateShapeCoords = function (shape: any) {
@@ -217,19 +245,15 @@ const MapComponent: React.FC<MapComponentProps> = ({ onCoordsUpdate }) => {
              const b = s.getBounds()
              if (b) geofenceInfo.push(`Rectangle: NE(${b.getNorthEast().toUrlValue(6)}), SW(${b.getSouthWest().toUrlValue(6)})`)
         }
-        
-        const markerInfo: string[] = []
-        shapes.markers.forEach(m => {
-            const pos = m.getPosition()
-            if(pos) markerInfo.push(`Marker: Position(${pos.toUrlValue(6)})`)
-        })
 
-        info = geofenceInfo.join('<br/>') + (geofenceInfo.length && markerInfo.length ? '<br/><br/>' : '') + markerInfo.join('<br/>')
+        info = geofenceInfo.join('\n')
         
         info += checkGeofence()
 
         onCoordsUpdate(info)
       }
+      
+      updateCoordsRef.current = updateShapeCoords
 
       function deleteSelectedShape() {
         if (selectedShape) {
@@ -312,8 +336,9 @@ const MapComponent: React.FC<MapComponentProps> = ({ onCoordsUpdate }) => {
       input.style.fontFamily = 'Roboto'
       input.style.textOverflow = 'ellipses'
       input.style.padding = '0 11px 0 13px'
-      input.style.width = '400px'
+      input.style.width = '35%'
       input.style.maxWidth = '100%'
+      input.style.marginLeft = '10px'
       input.placeholder = 'Search Google Maps'
 
       const searchBox = new google.maps.places.SearchBox(input)
@@ -349,7 +374,85 @@ const MapComponent: React.FC<MapComponentProps> = ({ onCoordsUpdate }) => {
     })
   }, [])
 
-  return <div ref={mapRef} style={{ height: '400px', width: '700px' }} />
+
+
+  const handleLatChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value
+    setLat(val)
+    if (val !== '') {
+        updateMarkerPosition(parseFloat(val), typeof lng === 'string' ? parseFloat(lng) : lng)
+    }
+  }
+
+  const handleLngChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value
+    setLng(val)
+    if (val !== '') {
+        updateMarkerPosition(typeof lat === 'string' ? parseFloat(lat) : lat, parseFloat(val))
+    }
+  }
+
+  const handleLatBlur = () => {
+    if (lat === '' || isNaN(Number(lat))) {
+        setLat(DEFAULT_LAT)
+        updateMarkerPosition(DEFAULT_LAT, typeof lng === 'string' ? parseFloat(lng) || DEFAULT_LNG : lng)
+    }
+  }
+
+  const handleLngBlur = () => {
+    if (lng === '' || isNaN(Number(lng))) {
+        setLng(DEFAULT_LNG)
+        updateMarkerPosition(typeof lat === 'string' ? parseFloat(lat) || DEFAULT_LAT : lat, DEFAULT_LNG)
+    }
+  }
+
+  const updateMarkerPosition = (nLat: number, nLng: number) => {
+    const marker = shapesRef.current.markers[0]
+    if (marker && !isNaN(nLat) && !isNaN(nLng)) {
+        const newPos = new google.maps.LatLng(nLat, nLng)
+        marker.setPosition(newPos)
+        
+        // Pan map to new position for better UX
+        if (mapRef.current) {
+            // We need access to the map instance. 
+            // Since we don't have it in state, we can use the marker's map reference
+            const map = marker.getMap() as google.maps.Map
+            if (map) map.panTo(newPos)
+        }
+        
+        updateCoordsRef.current(marker)
+    }
+  }
+
+  return (
+    <div>
+        <div ref={mapRef} style={{ height: '400px', width: '700px', marginBottom: '10px' }} />
+        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <div>
+                <label style={{ marginRight: '5px' }}>Latitude (X): </label>
+                <input 
+                    type="number" 
+                    value={lat} 
+                    onChange={handleLatChange}
+                    onBlur={handleLatBlur}
+                    step="any"
+                    style={{ padding: '5px' }}
+                />
+            </div>
+            <div>
+                <label style={{ marginRight: '5px' }}>Longitude (Y): </label>
+                <input 
+                    type="number" 
+                    value={lng} 
+                    onChange={handleLngChange}
+                    onBlur={handleLngBlur}
+                    step="any"
+                    style={{ padding: '5px' }}
+                />
+            </div>
+        </div>
+    </div>
+  )
 }
 
 export default MapComponent
